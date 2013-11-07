@@ -1,0 +1,110 @@
+(ns workbook.incant)
+
+;; Incanter <http://incanter.org> is an R-like platform for Clojure.
+;; We're going to have a play with analysing and visualizing some data.
+
+(use '(incanter core stats charts io excel))
+
+
+;; view a function-plot
+(view (function-plot sin -4 4))
+
+;; view a histogram of the normal distribution
+(view (histogram (sample-normal 1000)))
+
+;; what is the distribution of the entropy fn from our decision tree homework?
+(view (bar-chart (range 100) (for [i (range 100)] (workbook.dec-tree/entropy (/ i 100)))))
+
+;; Maybe we want to graph some data that's embedded in these web pages:
+;; http://en.wikipedia.org/wiki/List_of_countries_by_life_expectancy
+;; http://en.wikipedia.org/wiki/List_of_countries_by_income_equality
+
+;; a tiny subset of gini ineqality data
+(def inequality {"Australia" 0.336, "Israel" 0.371, "Slovenia" 0.236})
+
+;; a tiny subset of life expectancy data, male/female pairs.
+(def expectancy {"Australia" [79.2 83.8], "Israel" [79.2 82.9], "Slovenia" [75.9 82.5]})
+
+;; scatter-plot ineqality vs female life expectancy, taking a moment
+;; to appreciate the notation. N.B. map'ing expectancy using the keys
+;; of inequality means we only plot data points for which we have
+;; both.
+(def plot (scatter-plot (vals inequality) (map (comp second expectancy) (keys inequality))))
+
+;; add text labels so we know which countries are which
+(doseq [k (keys inequality)]
+  (add-text plot (inequality k) (second (expectancy k)) k))
+
+;; show the plot
+(view plot)
+
+;; Your homework: get the rest of the data from above Wiki links, do
+;; any cleansing or normalization required, plot the results. BUT! you
+;; should do so trying to minimize the number of manual steps involved
+;; by using the full power of emacs + clojure. Your deliverable must
+;; show your work (intermediate states of the data, a narrative of
+;; what you did to get from A->B, any code you wrote as part of the
+;; process).
+
+
+;; My process:
+;; I followed the wikipedia citations back to their U.N. links, hoping
+;; I could process everything using Incanter's read-xls function. This
+;; ended up not working because read-xls choked on an embedded image,
+;; and I needed a third data source to join the ISO numeric country
+;; codes to the ISO 3 letter country codes. I put the modified .xls
+;; files in resources and went from there....
+
+;; In short, I found Incanter Datasets really awkward to work with,
+;; but I probably just need to spend more time with them. The sel
+;; function seems to be the only function that allowed you to slice
+;; and filter, and I kept missing all the Clojure seq functions.
+;; Finally I realized you can just to-list them. The rest was just a
+;; lot of trial and error and learning new Clojure functions :)
+
+;; Setup our country code maps for easy retrieval
+;; Source: http://unstats.un.org/unsd/methods/m49/m49alpha.htm
+(def country-codes (to-list (read-xls "resources/country_codes.xls")))
+(def country-by-code (zipmap (map #(nth % 2) country-codes) (map #(nth % 1) country-codes)))
+(def country-by-num (zipmap (map #(nth % 0) country-codes) (map #(nth % 1) country-codes)))
+
+;; Source: http://esa.un.org/wpp/Excel-Data/DB01_Period_Indicators/WPP2010_DB1_F05_1_LIFE_EXPECTANCY_0_BOTH_SEXES.XLS
+;; modified to remove blank headers and an image that was confusing read-xls
+(defn get-life-expectancy
+  "Get just the country code and 2005-2010 data keyed by country name"
+  []
+  (let [data (read-xls "resources/life_expectancy_both_sexes.xls")
+        cc-2010 (to-list (sel data :cols [4 16]))]
+    (map #(vector (country-by-num (nth % 0)) (nth % 1)) cc-2010)))
+
+;; Download and transform the GINI data.
+;; Source: http://api.worldbank.org/datafiles/SI.POV.GINI_Indicator_MetaData_en_EXCEL.xl
+(defn get-gini-data
+  "Get GINI data from the latest available year keyed by country name"
+  []
+  (let [gini (read-xls "http://api.worldbank.org/datafiles/SI.POV.GINI_Indicator_MetaData_en_EXCEL.xls")
+        keys (sel gini :cols 1)
+        data (sel gini :cols (range 2 (- (ncol gini) 1)))
+        ;; this seems inefficient but not sure how else to do it
+        reduced (for [i (range 0 (count keys))]
+                  [(nth keys i)
+                   (first (reverse (filter #(not= nil %) (sel data :rows i))))])]
+    (map #(vector (country-by-code (nth % 0)) (nth % 1)) reduced)))
+
+;; get maps of get-gini-data and get-life-expectancy and remove nil values
+(def gini (into {} (filter #(not-any? nil? %) (get-gini-data))))
+(def life-expectancy (into {} (filter #(not-any? nil? %) (get-life-expectancy))))
+(print life-expectancy)
+(print gini)
+
+;; This works! Hurray!
+(def plot (scatter-plot (vals gini) (map (comp life-expectancy) (keys gini)) :x-label "GINI" :y-label "Life Expectancy"))
+
+;; This crashes :( Removed all the nil values and still no go.
+(doseq [k (keys gini)]
+  (add-text plot (gini k) (life-expectancy k) k))
+
+(view plot)
+
+(use 'clojure.walk)
+(walk)
